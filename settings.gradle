@@ -1,0 +1,32 @@
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// 读取环境变量
+def includeApp = System.getenv('INCLUDE_APP') ?: 'true'
+println "INCLUDE_APP: ${includeApp}"
+// 根据环境变量决定是否包含 app 模块, jitpack构建时不包含app模块
+if (includeApp.toBoolean()) {
+    include ':app'
+}
+
+rootProject.name = "PipePlayer"
+include ':app'
+include ':pipePlayer'

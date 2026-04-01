@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">边下边播播放器</string>
+    <string name="hint_video_url">请输入视频URL</string>
+    <string name="btn_play">播放</string>
+    <string name="btn_pause">暂停</string>
+    <string name="btn_seek">跳转</string>
+    <string name="buffering">正在缓冲...</string>
+</resources>

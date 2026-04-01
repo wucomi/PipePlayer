@@ -1,0 +1,76 @@
+plugins {
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
+    id 'maven-publish'
+}
+
+android {
+    namespace 'com.hik.pipeplayer'
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 24
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    kotlinOptions {
+        jvmTarget = '11'
+    }
+}
+
+dependencies {
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.appcompat
+    implementation libs.material
+    testImplementation libs.junit
+    androidTestImplementation libs.androidx.junit
+    androidTestImplementation libs.androidx.espresso.core
+
+    implementation libs.gson
+    // MP4解析库
+    implementation libs.isoparser
+    // OkHttp网络库
+    implementation libs.okhttp
+    implementation libs.logging.interceptor
+}
+
+//maven-publish配置
+group = LIB_GROUP
+version = LIB_VERSION
+description = '边下边播播放库'
+tasks.register('sourcesJar', Jar) {
+    from android.sourceSets.main.java.srcDirs
+    archiveClassifier.set('sources')
+}
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                artifactId 'pipe-player'
+                from components.release
+                artifact sourcesJar
+            }
+        }
+        repositories {
+            maven {
+                url 'https://jitpack.io'
+                credentials {
+                    username project.findProperty("jitpack.username")
+                    password project.findProperty("jitpack.password")
+                }
+            }
+        }
+    }
+}
