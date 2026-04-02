@@ -74,10 +74,3 @@ afterEvaluate {
         }
     }
 }
-
-afterEvaluate {
-    // 确保生成元数据前 sourcesJar 已完成
-    tasks.named("generateMetadataFileForReleasePublication") {
-        dependsOn(tasks.named("sourcesJar"))
-    }
-}
