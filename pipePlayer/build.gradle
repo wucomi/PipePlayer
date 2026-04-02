@@ -28,6 +28,12 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
+
+    publishing {
+        singleVariant('release') {
+            withSourcesJar()
+        }
+    }
 }
 
 dependencies {
@@ -60,7 +66,6 @@ afterEvaluate {
             release(MavenPublication) {
                 artifactId 'pipe-player'
                 from components.release
-                artifact sourcesJar
             }
         }
         repositories {
@@ -72,5 +77,11 @@ afterEvaluate {
                 }
             }
         }
+    }
+}
+
+afterEvaluate {
+    tasks.named("generateMetadataFileForReleasePublication") {
+        dependsOn(tasks.named("sourcesJar"))
     }
 }
