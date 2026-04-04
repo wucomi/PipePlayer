@@ -16,6 +16,13 @@ data class Mp4StructureInfo(
     val mdatSize: Long,
 )
 
+@Keep
+data class Mp4Segment(
+    val durationMs: Long,
+    val segments: List<SegmentRange>,
+    val syncSampleNumber: List<Long>,
+)
+
 /**
  * 分片范围信息
  *

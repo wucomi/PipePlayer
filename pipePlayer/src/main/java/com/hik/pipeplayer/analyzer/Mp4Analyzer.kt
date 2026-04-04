@@ -3,15 +3,12 @@ package com.hik.pipeplayer.analyzer
 import android.util.Log
 import com.hik.pipeplayer.error.Mp4ParseException
 import org.mp4parser.IsoFile
-import org.mp4parser.boxes.iso14496.part12.ChunkOffsetBox
 import org.mp4parser.boxes.iso14496.part12.HandlerBox
 import org.mp4parser.boxes.iso14496.part12.MediaBox
 import org.mp4parser.boxes.iso14496.part12.MediaHeaderBox
 import org.mp4parser.boxes.iso14496.part12.MediaInformationBox
 import org.mp4parser.boxes.iso14496.part12.MovieBox
 import org.mp4parser.boxes.iso14496.part12.SampleTableBox
-import org.mp4parser.boxes.iso14496.part12.SampleToChunkBox
-import org.mp4parser.boxes.iso14496.part12.TimeToSampleBox
 import org.mp4parser.boxes.iso14496.part12.TrackBox
 import java.io.File
 import java.io.RandomAccessFile
@@ -83,7 +80,7 @@ class Mp4Analyzer(private val file: File) {
      * 按时间间隔获取MP4文件的片段范围
      */
     @Throws
-    fun getSegmentRanges(intervalMs: Long, totalSize: Long): List<SegmentRange> {
+    fun getSegmentRanges(intervalMs: Long, totalSize: Long): Mp4Segment {
         val currentTime = System.nanoTime()
 
         // 使用IsoFile解析MP4文件
@@ -124,18 +121,14 @@ class Mp4Analyzer(private val file: File) {
             val durationMs = ((mediaHeader?.duration ?: 0) * timescale).roundToLong() // 总时长（毫秒）
 
             // 5. 获取关键映射表
-            // stts: 时间到采样的映射
-            val sttsBox = sampleTable.getBoxes(TimeToSampleBox::class.java).firstOrNull()
-            // stsc: 采样到chunk的映射
-            val stscBox = sampleTable.getBoxes(SampleToChunkBox::class.java).firstOrNull()
-            // stco: chunk到文件偏移量的映射
-            val stcoBox = sampleTable.getBoxes(ChunkOffsetBox::class.java).firstOrNull()
-            // 时间到采样的映射数据
-            val sttsEntries = sttsBox?.entries ?: emptyList()
-            // 采样到chunk的映射数据
-            val stscEntries = stscBox?.entries ?: emptyList()
-            // chunk到文件偏移量的映射数据
-            val chunkOffsets = stcoBox?.chunkOffsets ?: LongArray(0)
+            // stts: 时间到采样的映射数据
+            val sttsEntries = sampleTable.timeToSampleBox?.entries ?: emptyList()
+            // stsc: 采样到chunk的映射数据
+            val stscEntries = sampleTable.sampleToChunkBox?.entries ?: emptyList()
+            // stco: chunk到文件偏移量的映射数据
+            val chunkOffsets = sampleTable.chunkOffsetBox?.chunkOffsets ?: LongArray(0)
+            // 关键帧索引
+            val syncSampleNumber = sampleTable.syncSampleBox?.sampleNumber ?: LongArray(0)
 
             // 预处理 sttsEntries（开始时间、开始索引、采样数量、每个采样的时间）
             val sttsInfos = mutableListOf<SttsEntryInfo>()
@@ -233,7 +226,7 @@ class Mp4Analyzer(private val file: File) {
             }
 
             Log.d(TAG, "getSegmentRanges time: ${(System.nanoTime() - currentTime) / 1000 / 1000}")
-            return ranges
+            return Mp4Segment(durationMs, ranges, syncSampleNumber.toList())
         }
     }
 }

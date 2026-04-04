@@ -17,6 +17,8 @@ interface IDownloader {
         val totalSize: Long
     )
 
+
+
     /**
      * 检测是否支持Range请求
      *
@@ -32,9 +34,9 @@ interface IDownloader {
      * @param start 起始字节位置（-1表示从0开始下载完整文件）
      * @param end 结束字节位置（-1表示下载到文件结束）
      * @param file 目标文件
-     * @return 是否成功
+     * @return 下载结果
      */
-    suspend fun download(url: String, start: Long, end: Long, file: File): Boolean
+    suspend fun download(url: String, start: Long, end: Long, file: File): DownloadResult
 
     /**
      * 释放资源

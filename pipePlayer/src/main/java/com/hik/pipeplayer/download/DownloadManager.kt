@@ -27,8 +27,8 @@ class DownloadManager() {
         start: Long,
         end: Long,
         file: File
-    ): CompletableDeferred<Boolean> {
-        val completable = CompletableDeferred<Boolean>()
+    ): CompletableDeferred<DownloadResult> {
+        val completable = CompletableDeferred<DownloadResult>()
         val job = coroutineScope.launch(start = CoroutineStart.LAZY) {
             val result = downloader.download(url, start, end, file)
             completable.complete(result)

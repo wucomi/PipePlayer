@@ -1,24 +1,24 @@
 package com.hik.pipeplayer.cache
 
 import android.util.Log
-import com.hik.pipeplayer.local.DataSegment
-import com.hik.pipeplayer.local.MetaSegment
-import com.hik.pipeplayer.local.IndexConfig
-import com.hik.pipeplayer.local.LocalCache
-import com.hik.pipeplayer.local.Segment
+import com.hik.pipeplayer.analyzer.Mp4Analyzer
 import com.hik.pipeplayer.download.DownloadManager
+import com.hik.pipeplayer.download.DownloadResult
 import com.hik.pipeplayer.download.IDownloader
 import com.hik.pipeplayer.error.CacheException
 import com.hik.pipeplayer.error.DiskSpaceException
 import com.hik.pipeplayer.error.DownloadException
 import com.hik.pipeplayer.error.ErrorCode
-import com.hik.pipeplayer.analyzer.Mp4Analyzer
+import com.hik.pipeplayer.local.DataSegment
+import com.hik.pipeplayer.local.IndexConfig
+import com.hik.pipeplayer.local.LocalCache
+import com.hik.pipeplayer.local.MetaSegment
+import com.hik.pipeplayer.local.Segment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.io.RandomAccessFile
 
 /**
@@ -108,11 +108,9 @@ class StreamLoader(
             // 配置不存在，检测MP4结构、生成分片配置
             if (indexConfig == null) {
                 Log.d(TAG, "配置不存在，检查是否支持分段下载")
-                val rangeResult = downloadManager.checkRangeSupport(videoUrl)
-                if (rangeResult.supportsRange) {
-                    Log.d(TAG, "支持分段下载，开始生成配置文件")
-                    generateIndexConfig(videoUrl, rangeResult.totalSize)
-                }
+                indexConfig = runCatching {
+                    generateIndexConfig(videoUrl)
+                }.getOrNull()
             }
 
             // 判断是否生成了IndexConfig
@@ -130,6 +128,7 @@ class StreamLoader(
                     callOnError(videoUrl, ErrorCode.DOWNLOAD_ERROR)
                 }
             } else {
+                // 生成播放文件
                 val playFile = localCache.getPlayFile(videoUrl)
                 if (playFile.exists()) {
                     Log.d(TAG, "有播放文件，执行onReady回调")
@@ -138,35 +137,66 @@ class StreamLoader(
                     }
                     seekTo(0)
                 } else {
-                    val firstSegment = indexConfig?.segments?.firstOrNull()
-                    if (firstSegment == null) {
+                    // 没有播放文件，先下载分片生成播放文件
+                    // 检查本地是否有元数据分片
+                    // 有元数据分片，复用元数据分片，并将分片补充完整
+                    // 没有元数据分片，直接下载第一个分片
+                    val metaSegFile =
+                        localCache.getSegmentTempFile(videoUrl, getMetaSegmentId(0))
+                    val segment = if (metaSegFile.exists()) {
+                        val segment = indexConfig?.segments?.find {
+                            it.endOffset >= metaSegFile.length()
+                        }
+                        segment
+                    } else {
+                        indexConfig?.segments?.firstOrNull()
+                    }
+                    if (segment == null) {
                         Log.e(TAG, "没有分片配置")
                         callOnError(videoUrl, ErrorCode.NO_SEGMENTS)
                         return@launch
                     }
-
-                    Log.d(TAG, "没有播放文件，下载第一个分片生成播放文件")
-                    val segmentTempPath = downloadSegment(firstSegment)
-                    if (segmentTempPath == null) {
-                        Log.d(TAG, "第一个分片下载失败")
-                        callOnError(videoUrl, ErrorCode.DOWNLOAD_ERROR)
+                    val startOffset = if (metaSegFile.exists()) metaSegFile.length() else 0
+                    Log.d(TAG, "下载分片生成播放文件")
+                    val result = if (startOffset == segment.endOffset) {
+                        DownloadResult(
+                            true,
+                            0,
+                            segment.endOffset,
+                            indexConfig?.totalSize ?: 0,
+                            metaSegFile,
+                        )
                     } else {
+                        downloadSegment(segment.copy(startOffset = startOffset))
+                    }
+                    if (result.success) {
                         // 更新状态
-                        firstSegment.state = 1
                         indexConfig?.let { config ->
+                            for (i in 0..config.segments.indexOf(segment)) {
+                                config.segments[i].state = 1
+                            }
                             localCache.saveIndexConfig(videoUrl, config)
                         }
 
-                        val segmentTempFile = File(segmentTempPath)
+                        val segmentTempFile = result.file
 
                         // 创建稀疏文件：分配完整视频大小，确保播放器可以正确解析
                         val totalSize = indexConfig?.totalSize ?: segmentTempFile.length()
                         localCache.createPlayFile(videoUrl, totalSize)
-
                         // 将第一个分片写入到正确的位置
                         val playFile = localCache.getPlayFile(videoUrl)
                         RandomAccessFile(playFile, "rw").use { raf ->
-                            raf.seek(firstSegment.startOffset)
+                            if (metaSegFile.exists()) {
+                                raf.seek(0)
+                                metaSegFile.inputStream().use { input ->
+                                    val buffer = ByteArray(8192)
+                                    var bytesRead: Int
+                                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                                        raf.write(buffer, 0, bytesRead)
+                                    }
+                                }
+                            }
+                            raf.seek(segment.startOffset)
                             segmentTempFile.inputStream().use { input ->
                                 val buffer = ByteArray(8192)
                                 var bytesRead: Int
@@ -177,12 +207,18 @@ class StreamLoader(
                         }
 
                         // 清理临时文件
+                        metaSegFile.delete()
                         segmentTempFile.delete()
+
                         Log.d(TAG, "生成播放文件，执行onReady回调")
                         withContext(Dispatchers.Main) {
                             callback?.onReady(playFile.absolutePath)
                         }
+
                         seekTo(0)
+                    } else {
+                        Log.d(TAG, "第一个分片下载失败")
+                        callOnError(videoUrl, ErrorCode.DOWNLOAD_ERROR)
                     }
                 }
             }
@@ -236,66 +272,63 @@ class StreamLoader(
         downloadManager.release()
     }
 
-    private suspend fun generateIndexConfig(videoUrl: String, totalSize: Long) {
-        val headerTempPath = downloadMeta() ?: throw DownloadException()
-        val structureInfo = Mp4Analyzer.analyze(File(headerTempPath))
-        val segmentRanges = Mp4Analyzer.getSegmentRanges(
-            File(headerTempPath),
-            DEFAULT_SEGMENT_DURATION_MS
-        )
-        File(headerTempPath).delete()
-        indexConfig = IndexConfig(
-            url = videoUrl,
-            totalSize = totalSize,
-            moovOffset = structureInfo.moovOffset,
-            moovSize = structureInfo.moovSize,
-            mdatOffset = structureInfo.mdatOffset,
-            mdatSize = structureInfo.mdatSize,
-            segments = segmentRanges.mapIndexed { index, range ->
-                DataSegment(
-                    getSegmentId(index),
-                    range.startOffset,
-                    range.endOffset,
-                    range.startTimeMs,
-                    range.endTimeMs,
-                    0
-                )
-            }.toMutableList()
-        )
-        localCache.saveIndexConfig(videoUrl, indexConfig!!)
-        Log.d(TAG, "generateCacheConfig完成")
-    }
-
-    @Throws
-    private suspend fun downloadMeta(): String? {
-        val initialSize = 1024 * 1024L
+    private suspend fun generateIndexConfig(videoUrl: String): IndexConfig {
         // 下载前1MB
-        val metaTempPath = downloadSegment(
+        val initialSize = 1024 * 1024L
+        val result = downloadSegment(
             MetaSegment(
                 id = getMetaSegmentId(0),
                 startOffset = 0,
                 endOffset = initialSize - 1,
             )
         )
-
-        if (metaTempPath == null) return null
+        if (!result.success) {
+            throw DownloadException()
+        }
 
         // 分析是否包含完整moov
-        val structureInfo = Mp4Analyzer.analyze(File(metaTempPath))
+        val analyzer = Mp4Analyzer(result.file)
+        val structureInfo = analyzer.analyzeStructureInfo()
         if (structureInfo.mdatOffset > initialSize) {
             // 不完整,需要继续下载文件头
-            val metaTempPath1 = downloadSegment(
+            val result1 = downloadSegment(
                 MetaSegment(
                     id = getMetaSegmentId(1),
                     startOffset = initialSize,
                     endOffset = structureInfo.mdatOffset,
                 )
             )
-            if (metaTempPath1 == null) return null
-            File(metaTempPath1).copyTo(File(metaTempPath))
+            if (!result1.success) {
+                throw DownloadException()
+            }
+            result1.file.copyTo(result.file)
         }
 
-        return metaTempPath
+        val mp4Segment = analyzer.getSegmentRanges(DEFAULT_SEGMENT_DURATION_MS, result.totalSize)
+        val indexConfig = IndexConfig(
+            url = videoUrl,
+            totalSize = result.totalSize,
+            moovOffset = structureInfo.moovOffset,
+            moovSize = structureInfo.moovSize,
+            mdatOffset = structureInfo.mdatOffset,
+            mdatSize = structureInfo.mdatSize,
+            durationMs = mp4Segment.durationMs,
+            segments = mp4Segment.segments.mapIndexed { index, range ->
+                DataSegment(
+                    getSegmentId(index),
+                    range.startOffset,
+                    range.endOffset,
+                    range.startTimeMs,
+                    range.endTimeMs,
+                    range.firstSample,
+                    0
+                )
+            },
+            syncSampleNumbers = mp4Segment.syncSampleNumber
+        )
+        localCache.saveIndexConfig(videoUrl, indexConfig)
+        Log.d(TAG, "generateCacheConfig完成")
+        return indexConfig
     }
 
     // 获取活跃窗口内的分片
@@ -327,13 +360,13 @@ class StreamLoader(
     private suspend fun downloadDataSegment(segment: DataSegment) {
         Log.d(TAG, "开始下载${segment.id}")
         try {
-            val tempPath = downloadSegment(segment)
-            if (tempPath != null) {
+            val result = downloadSegment(segment)
+            if (result.success) {
                 // 合并到播放文件
                 val playFile = localCache.getPlayFile(videoUrl)
                 RandomAccessFile(playFile, "rw").use { raf ->
                     raf.seek(segment.startOffset)
-                    File(tempPath).inputStream().use { input ->
+                    result.file.inputStream().use { input ->
                         val buffer = ByteArray(8192)
                         var bytesRead: Int
                         while (input.read(buffer).also { bytesRead = it } != -1) {
@@ -342,7 +375,7 @@ class StreamLoader(
                     }
                 }
                 // 清理临时文件
-                File(tempPath).delete()
+                result.file.delete()
                 // 更新状态
                 segment.state = 1
                 indexConfig?.let { config ->
@@ -401,30 +434,30 @@ class StreamLoader(
         }
     }
 
-    private suspend fun downloadSegment(segment: Segment): String? {
+    private suspend fun downloadSegment(segment: Segment): DownloadResult {
         requireLimitDiskCache()
         val tempFile = localCache.getSegmentTempFile(videoUrl, segment.id)
-        val success = downloadManager.download(
+        val result = downloadManager.download(
             url = videoUrl,
             segmentId = segment.id,
             start = segment.startOffset,
             end = segment.endOffset,
             file = tempFile
         ).await()
-        return if (success) tempFile.absolutePath else null
+        return result
     }
 
     private suspend fun downloadComplete(): String? {
         requireLimitDiskCache()
         val playFile = localCache.getPlayFile(videoUrl)
-        val success = downloadManager.download(
+        val result = downloadManager.download(
             url = videoUrl,
             segmentId = null,
             start = -1,
             end = -1,
             file = playFile
         ).await()
-        return if (success) playFile.absolutePath else null
+        return if (result.success) playFile.absolutePath else null
     }
 
     private fun requireLimitDiskCache() {
@@ -435,7 +468,7 @@ class StreamLoader(
         }
     }
 
-    private fun getMetaSegmentId(index: Int) = "hed_${index.toString().padStart(5, '0')}"
+    private fun getMetaSegmentId(index: Int) = "meta_${index.toString().padStart(5, '0')}"
     private fun getSegmentId(index: Int) = "seg_${index.toString().padStart(5, '0')}"
     private suspend fun callOnError(url: String, code: Int) = withContext(Dispatchers.Main) {
         callback?.onError(code)

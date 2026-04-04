@@ -15,7 +15,9 @@ data class IndexConfig(
     val moovSize: Long = 0,
     val mdatOffset: Long = 0,
     val mdatSize: Long = 0,
-    val segments: MutableList<DataSegment> = mutableListOf()
+    val durationMs: Long = 0,
+    val segments: List<DataSegment> = listOf(),
+    val syncSampleNumbers: List<Long> = listOf()
 )
 
 /**
@@ -51,6 +53,7 @@ data class DataSegment(
     override val endOffset: Long,
     val startTimeMs: Long,
     val endTimeMs: Long,
+    val firstSample: Long,
     override var state: Int = 0,
 ) : Segment
 
