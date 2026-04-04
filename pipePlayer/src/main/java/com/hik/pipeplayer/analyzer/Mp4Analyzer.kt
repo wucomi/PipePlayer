@@ -15,11 +15,16 @@ import org.mp4parser.boxes.iso14496.part12.TimeToSampleBox
 import org.mp4parser.boxes.iso14496.part12.TrackBox
 import java.io.File
 import java.io.RandomAccessFile
+import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
-object Mp4Analyzer {
-    const val TAG = "Mp4Analyzer"
-    fun analyze(file: File): Mp4StructureInfo {
+class Mp4Analyzer(private val file: File) {
+    companion object {
+        const val TAG = "Mp4Analyzer"
+    }
+
+    fun analyzeStructureInfo(): Mp4StructureInfo {
         val currentTime = System.nanoTime()
         RandomAccessFile(file, "r").use { raf ->
             var ftypSize = 0L
@@ -74,16 +79,23 @@ object Mp4Analyzer {
         }
     }
 
+    /**
+     * 按时间间隔获取MP4文件的片段范围
+     */
     @Throws
-    fun getSegmentRanges(file: File, intervalMs: Long): List<SegmentRange> {
+    fun getSegmentRanges(intervalMs: Long, totalSize: Long): List<SegmentRange> {
         val currentTime = System.nanoTime()
+
+        // 使用IsoFile解析MP4文件
         IsoFile(file).use { isoFile ->
+            // 1. 获取moov box（存储视频元数据）
             val movieBox = isoFile.getBoxes(MovieBox::class.java).firstOrNull()
             if (movieBox == null) {
                 Log.e(TAG, "No moov box found")
                 throw Mp4ParseException()
             }
 
+            // 2. 找到视频轨道
             val track = movieBox.getBoxes(TrackBox::class.java)
                 .firstOrNull { trackBox ->
                     val handler = trackBox.getBoxes(MediaBox::class.java)
@@ -97,6 +109,7 @@ object Mp4Analyzer {
                 throw Mp4ParseException()
             }
 
+            // 3. 获取媒体信息和样本表
             val mediaBox = track.getBoxes(MediaBox::class.java).firstOrNull()
             val mediaInfo = mediaBox?.getBoxes(MediaInformationBox::class.java)?.firstOrNull()
             val sampleTable = mediaInfo?.getBoxes(SampleTableBox::class.java)?.firstOrNull()
@@ -105,105 +118,120 @@ object Mp4Analyzer {
                 throw Mp4ParseException()
             }
 
+            // 4. 获取时间尺度和总时长
             val mediaHeader = mediaBox.getBoxes(MediaHeaderBox::class.java)?.firstOrNull()
-            val timescale = mediaHeader?.timescale ?: 1000 // 时间单位，1s=多少时间单位
-            val duration = mediaHeader?.duration ?: 0
-            val durationMs = (duration * 1000) / timescale
+            val timescale = 1000f / (mediaHeader?.timescale ?: 1000) // 时间单位，1s=多少时间单位
+            val durationMs = ((mediaHeader?.duration ?: 0) * timescale).roundToLong() // 总时长（毫秒）
 
+            // 5. 获取关键映射表
+            // stts: 时间到采样的映射
             val sttsBox = sampleTable.getBoxes(TimeToSampleBox::class.java).firstOrNull()
+            // stsc: 采样到chunk的映射
             val stscBox = sampleTable.getBoxes(SampleToChunkBox::class.java).firstOrNull()
+            // stco: chunk到文件偏移量的映射
             val stcoBox = sampleTable.getBoxes(ChunkOffsetBox::class.java).firstOrNull()
-
+            // 时间到采样的映射数据
             val sttsEntries = sttsBox?.entries ?: emptyList()
+            // 采样到chunk的映射数据
             val stscEntries = stscBox?.entries ?: emptyList()
+            // chunk到文件偏移量的映射数据
             val chunkOffsets = stcoBox?.chunkOffsets ?: LongArray(0)
 
+            // 预处理 sttsEntries（开始时间、开始索引、采样数量、每个采样的时间）
+            val sttsInfos = mutableListOf<SttsEntryInfo>()
+            var firstTime = 0L
+            var firstSample = 0L
+            for (entry in sttsEntries) {
+                val deltaMs = (entry.delta * timescale).roundToInt()
+                sttsInfos.add(
+                    SttsEntryInfo(
+                        firstTime,
+                        firstSample,
+                        entry.count,
+                        deltaMs
+                    )
+                )
+                firstTime += entry.count * deltaMs
+                firstSample += entry.count
+            }
+
+            // 预处理 stscEntries （开始样本号、开始chunk索引、chunk数量、每个chunk的采样数）
+            val stscInfos = mutableListOf<StscEntryInfo>()
+            var firstSample1 = 0L
+            for (i in stscEntries.indices) {
+                val entry = stscEntries[i]
+                val nextFirstChunk = if (i + 1 < stscEntries.size) {
+                    stscEntries[i + 1].firstChunk
+                } else {
+                    chunkOffsets.size + 1L
+                }
+                val chunkCount = nextFirstChunk - entry.firstChunk
+                stscInfos.add(
+                    StscEntryInfo(
+                        firstSample1,
+                        entry.firstChunk,
+                        chunkCount,
+                        entry.samplesPerChunk,
+                    )
+                )
+                firstSample1 += chunkCount * entry.samplesPerChunk
+            }
+
+            // 6. 计算片段范围
             val ranges = mutableListOf<SegmentRange>()
-            for (i in 1 until durationMs / intervalMs) {
-                val targetEndTime = i * intervalMs
-                // 1. 时间 -> 目标采样序号
-                var targetSample = 0L
-                var timeMs = 0L
-                for (entry in sttsEntries) {
-                    val entryTimeMS = (entry.delta * 1000f / timescale).roundToInt()
-                    val entryTotalTimeMs = entry.count * entryTimeMS
-                    val remainingTimeMs = targetEndTime - timeMs
-                    if (remainingTimeMs > entryTotalTimeMs) {
-                        targetSample += entry.count
-                        timeMs += entryTotalTimeMs
-                    } else {
-                        val count = (remainingTimeMs.toFloat() / entryTimeMS + 0.5).toLong()
-                        targetSample += count
-                        break
-                    }
+            for (i in 1..(durationMs + intervalMs - 1) / intervalMs) {
+                // 目标结束时间（毫秒）
+                val targetEndTime = min(i * intervalMs, durationMs)
+
+                // 时间 -> 目标结束采样序号
+                val sttsEntryInfo = sttsInfos.first {
+                    it.firstTime + it.deltaMs * it.count >= targetEndTime
                 }
+                val targetEndSample =
+                    sttsEntryInfo.firstSample + (targetEndTime - sttsEntryInfo.firstTime) / sttsEntryInfo.deltaMs
 
-                // 2. 目标采样序号 -> chunk -> endOffset/endSample
-                var sampleCount = 0L
-                var endChunk = 0L
-                var endSample = 0L
-                var endOffset = 0L
-
-                for (i in stscEntries.indices) {
-                    val entry = stscEntries[i]
-                    // 获取下一个起始块的索引，最后一个是通过块的个数+1计算
-                    val nextFirstChunk = if (i + 1 < stscEntries.size) {
-                        stscEntries[i + 1].firstChunk
-                    } else chunkOffsets.size + 1L
-                    val chunkCount = nextFirstChunk - entry.firstChunk
-                    val samplesInEntry = chunkCount * entry.samplesPerChunk
-
-                    if (sampleCount + samplesInEntry > targetSample) {
-                        // targetSample 在这个 entry 里
-                        val remainingSamples = targetSample - sampleCount
-                        val chunkCount =
-                            (remainingSamples.toFloat() / entry.samplesPerChunk + 0.5).toLong()
-                        endChunk = entry.firstChunk + chunkCount
-                        endSample = sampleCount + chunkCount * entry.samplesPerChunk
-
-                        endOffset = if (endChunk < chunkOffsets.size - 1) {
-                            chunkOffsets[(endChunk + 1).toInt()] - 1
-                        } else {
-                            file.length()
-                        }
-                        break
-                    }
-                    sampleCount += samplesInEntry
+                // 目标结束采样序号 -> endChunk
+                val stscEntryInfo = stscInfos.first {
+                    it.firstSample + it.chunkCount * it.samplesPerChunk >= targetEndSample
                 }
+                val remainingSample = targetEndSample - stscEntryInfo.firstSample
+                val samplesPerChunk = stscEntryInfo.samplesPerChunk
+                val endChunk = stscEntryInfo.firstChunk + remainingSample / samplesPerChunk
 
-                // 3. endSample -> endTimeMs
-                var endTimeMs = 0L
-                var sampleTotal = 0L
-                for (entry in sttsEntries) {
-                    val entryTimeMS = (entry.delta * 1000f / timescale).roundToInt()
-                    val entryTotalTimeMs = entry.count * entryTimeMS
-                    val remainingSamples = endSample - sampleTotal
-                    if (remainingSamples > entry.count) {
-                        sampleTotal += entry.count
-                        endTimeMs += entryTotalTimeMs
-                    } else {
-                        endTimeMs += remainingSamples * entryTimeMS
-                        break
-                    }
-                }
+                // endSample -> endOffset
+                val endOffset = chunkOffsets[min(endChunk.toInt() - 1, chunkOffsets.size - 1)]
 
-                var startOffset = 0L
-                var startTimeMs = 0L
+                // chunk -> endSample
+                val endSample = targetEndSample - remainingSample % samplesPerChunk
+
+                // endSample -> endTimeMs
+                val sttsEntryInfo1 = sttsInfos.first { it.firstSample + it.count >= endSample }
+                val endTimeMs =
+                    sttsEntryInfo1.firstTime + (endSample - sttsEntryInfo1.firstSample) * sttsEntryInfo1.deltaMs
+
+                //  计算片段起始位置
+                var startOffset = 0L // 起始偏移量
+                var startTimeMs = 0L // 起始时间
+                var firstSample = 0L // 首帧索引
                 ranges.lastOrNull()?.let {
                     startOffset = it.endOffset + 1
                     startTimeMs = it.endTimeMs + 1
+                    firstSample = it.endSample + 1
                 }
-                ranges.add(SegmentRange(startTimeMs, endTimeMs, startOffset, endOffset))
+
+                // 添加分段
+                ranges.add(
+                    SegmentRange(
+                        startTimeMs,
+                        if (targetEndTime == durationMs) durationMs else endTimeMs,
+                        startOffset,
+                        if (targetEndTime == durationMs) totalSize else endOffset,
+                        firstSample,
+                        endSample,
+                    )
+                )
             }
 
-            // 添加最后一个分片
-            var startOffset = 0L
-            var startTimeMs = 0L
-            ranges.lastOrNull()?.let {
-                startOffset = it.endOffset + 1
-                startTimeMs = it.endTimeMs + 1
-            }
-            ranges.add(SegmentRange(startTimeMs, durationMs, startOffset, file.length()))
             Log.d(TAG, "getSegmentRanges time: ${(System.nanoTime() - currentTime) / 1000 / 1000}")
             return ranges
         }
