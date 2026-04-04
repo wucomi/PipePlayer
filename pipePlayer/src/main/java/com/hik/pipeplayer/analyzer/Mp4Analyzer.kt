@@ -33,10 +33,19 @@ object Mp4Analyzer {
 
             while (offset < fileSize) {
                 raf.seek(offset)
-                val boxSize = raf.readInt().toLong()
+                var boxSize = raf.readInt().toUInt().toLong()
                 val boxType = ByteArray(4)
                 raf.readFully(boxType)
                 val type = String(boxType)
+
+                // 处理 extended size (size == 1)
+                if (boxSize == 1L) {
+                    boxSize = raf.readLong()
+                }
+                // 处理 size == 0 (box 延伸到文件末尾)
+                else if (boxSize == 0L) {
+                    boxSize = fileSize - offset
+                }
 
                 when (type) {
                     "ftyp" -> ftypSize = boxSize
