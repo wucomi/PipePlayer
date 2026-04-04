@@ -414,22 +414,22 @@ class StreamLoader(
 
         if (segment.state == 0) {
             bufferingLack()
-        } else if (currentSegmentIndex == segments.size - 1) {
-            // 最后一个分片单独处理，后面没有预加载了
-            bufferReady()
         } else {
             var cacheTimeMs = segment.endTimeMs - currentTimeMs
-            if (cacheTimeMs < segmentDurationMs / 2 && currentSegmentIndex < segments.size - 1) {
+            val halfDurationMs = segmentDurationMs / 2
+            if (cacheTimeMs < halfDurationMs && currentSegmentIndex < segments.size - 1) {
                 val nextSegment = segments[currentSegmentIndex + 1]
                 if (nextSegment.state == 1) {
                     cacheTimeMs = nextSegment.endTimeMs - currentTimeMs
                 }
             }
             Log.d(TAG, "cacheTimeMs: $cacheTimeMs")
-            if (cacheTimeMs < segmentDurationMs / 2) {
-                bufferingLack()
-            } else {
+            if (cacheTimeMs >= halfDurationMs
+                || (indexConfig?.durationMs ?: 0) - currentTimeMs <= halfDurationMs
+            ) {
                 bufferReady()
+            } else {
+                bufferingLack()
             }
         }
     }
