@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
  * ├── index.json       # 分片配置
  * ├── video.mp4        # 播放文件（稀疏文件）
  * └── tmp/             # 下载中临时文件
- *     ├── hed_00000.tmp
+ *     ├── meta_00000.tmp
  *     ├── seg_00000.tmp
  *     └── seg_00001.tmp
  */

@@ -27,7 +27,7 @@ data class IndexConfig(
  * @property state 状态：0未下载完成，1下载完成
  */
 @Keep
-data class HeaderSegment(
+data class MetaSegment(
     override val id: String,
     override val startOffset: Long,
     override val endOffset: Long,

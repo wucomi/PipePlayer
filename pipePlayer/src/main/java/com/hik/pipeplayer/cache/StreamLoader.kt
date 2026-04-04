@@ -2,7 +2,7 @@ package com.hik.pipeplayer.cache
 
 import android.util.Log
 import com.hik.pipeplayer.local.DataSegment
-import com.hik.pipeplayer.local.HeaderSegment
+import com.hik.pipeplayer.local.MetaSegment
 import com.hik.pipeplayer.local.IndexConfig
 import com.hik.pipeplayer.local.LocalCache
 import com.hik.pipeplayer.local.Segment
@@ -237,7 +237,7 @@ class StreamLoader(
     }
 
     private suspend fun generateIndexConfig(videoUrl: String, totalSize: Long) {
-        val headerTempPath = downloadHeader() ?: throw DownloadException()
+        val headerTempPath = downloadMeta() ?: throw DownloadException()
         val structureInfo = Mp4Analyzer.analyze(File(headerTempPath))
         val segmentRanges = Mp4Analyzer.getSegmentRanges(
             File(headerTempPath),
@@ -267,35 +267,35 @@ class StreamLoader(
     }
 
     @Throws
-    private suspend fun downloadHeader(): String? {
+    private suspend fun downloadMeta(): String? {
         val initialSize = 1024 * 1024L
         // 下载前1MB
-        val headerTempPath = downloadSegment(
-            HeaderSegment(
-                id = getHeaderSegmentId(0),
+        val metaTempPath = downloadSegment(
+            MetaSegment(
+                id = getMetaSegmentId(0),
                 startOffset = 0,
                 endOffset = initialSize - 1,
             )
         )
 
-        if (headerTempPath == null) return null
+        if (metaTempPath == null) return null
 
         // 分析是否包含完整moov
-        val structureInfo = Mp4Analyzer.analyze(File(headerTempPath))
+        val structureInfo = Mp4Analyzer.analyze(File(metaTempPath))
         if (structureInfo.mdatOffset > initialSize) {
             // 不完整,需要继续下载文件头
-            val headerTempPath1 = downloadSegment(
-                HeaderSegment(
-                    id = getHeaderSegmentId(1),
+            val metaTempPath1 = downloadSegment(
+                MetaSegment(
+                    id = getMetaSegmentId(1),
                     startOffset = initialSize,
                     endOffset = structureInfo.mdatOffset,
                 )
             )
-            if (headerTempPath1 == null) return null
-            File(headerTempPath1).copyTo(File(headerTempPath))
+            if (metaTempPath1 == null) return null
+            File(metaTempPath1).copyTo(File(metaTempPath))
         }
 
-        return headerTempPath
+        return metaTempPath
     }
 
     // 获取活跃窗口内的分片
@@ -435,7 +435,7 @@ class StreamLoader(
         }
     }
 
-    private fun getHeaderSegmentId(index: Int) = "hed_${index.toString().padStart(5, '0')}"
+    private fun getMetaSegmentId(index: Int) = "hed_${index.toString().padStart(5, '0')}"
     private fun getSegmentId(index: Int) = "seg_${index.toString().padStart(5, '0')}"
     private suspend fun callOnError(url: String, code: Int) = withContext(Dispatchers.Main) {
         callback?.onError(code)
