@@ -1,10 +1,13 @@
 package com.hik.pipeplayer.analyzer
 
+import androidx.annotation.Keep
+
 /**
  * MP4结构信息
  *
  * 存储MP4文件的关键box位置和大小信息
  */
+@Keep
 data class Mp4StructureInfo(
     val ftypSize: Long,
     val moovOffset: Long,
@@ -21,6 +24,7 @@ data class Mp4StructureInfo(
  * @param startOffset 开始字节偏移量
  * @param endOffset 结束字节偏移量
  */
+@Keep
 data class SegmentRange(
     val startTimeMs: Long,
     val endTimeMs: Long,

@@ -1,10 +1,13 @@
 package com.hik.pipeplayer.local
 
+import androidx.annotation.Keep
+
 /**
  * 分片配置
  *
  * 存储在index.json中，记录视频的分片信息
  */
+@Keep
 data class IndexConfig(
     val url: String,
     val totalSize: Long,
@@ -23,6 +26,7 @@ data class IndexConfig(
  * @property endOffset 分片结束偏移量
  * @property state 状态：0未下载完成，1下载完成
  */
+@Keep
 data class HeaderSegment(
     override val id: String,
     override val startOffset: Long,
@@ -40,6 +44,7 @@ data class HeaderSegment(
  * @property endTimeMs 分片结束时间
  * @property state 状态：0未下载完成，1下载完成
  */
+@Keep
 data class DataSegment(
     override val id: String,
     override val startOffset: Long,
@@ -52,6 +57,7 @@ data class DataSegment(
 /**
  * 分片接口
  */
+@Keep
 interface Segment {
     val id: String
     val startOffset: Long

@@ -16,11 +16,11 @@ import org.mp4parser.boxes.iso14496.part12.TrackBox
 import java.io.File
 import java.io.RandomAccessFile
 import kotlin.math.roundToInt
-import kotlin.text.get
 
 object Mp4Analyzer {
     const val TAG = "Mp4Analyzer"
     fun analyze(file: File): Mp4StructureInfo {
+        val currentTime = System.nanoTime()
         RandomAccessFile(file, "r").use { raf ->
             var ftypSize = 0L
             var moovOffset = 0L
@@ -54,6 +54,7 @@ object Mp4Analyzer {
                 offset += boxSize
             }
 
+            Log.d(TAG, "analyze time: ${(System.nanoTime() - currentTime) / 1000 / 1000}")
             return Mp4StructureInfo(
                 ftypSize = ftypSize,
                 moovOffset = moovOffset,
@@ -66,6 +67,7 @@ object Mp4Analyzer {
 
     @Throws
     fun getSegmentRanges(file: File, intervalMs: Long): List<SegmentRange> {
+        val currentTime = System.nanoTime()
         IsoFile(file).use { isoFile ->
             val movieBox = isoFile.getBoxes(MovieBox::class.java).firstOrNull()
             if (movieBox == null) {
@@ -193,6 +195,7 @@ object Mp4Analyzer {
                 startTimeMs = it.endTimeMs + 1
             }
             ranges.add(SegmentRange(startTimeMs, durationMs, startOffset, file.length()))
+            Log.d(TAG, "getSegmentRanges time: ${(System.nanoTime() - currentTime) / 1000 / 1000}")
             return ranges
         }
     }
