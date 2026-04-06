@@ -285,8 +285,8 @@ class StreamLoader(
     }
 
     private suspend fun generateIndexConfig(videoUrl: String): IndexConfig {
-        // 下载前1MB
-        val initialSize = 1024 * 1024L
+        // 下载前2MB
+        val initialSize = 2 * 1024 * 1024L
         val result = downloadSegment(
             MetaSegment(
                 id = getMetaSegmentId(0),
@@ -313,8 +313,17 @@ class StreamLoader(
             if (!result1.success) {
                 throw DownloadException()
             }
-            result1.file.copyTo(result.file)
-            result1.file.delete()
+            RandomAccessFile(result.file, "rw").use { raf ->
+                raf.seek(raf.length())
+                result1.file.inputStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        raf.write(buffer, 0, bytesRead)
+                    }
+                }
+                result1.file.delete()
+            }
         } else if (structureInfo.moovSize == 0L) {
             // moov原子在文件末尾，下载完整的moov原子
             val result1 = downloadSegment(
