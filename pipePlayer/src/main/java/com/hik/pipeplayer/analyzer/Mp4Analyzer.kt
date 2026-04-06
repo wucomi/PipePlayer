@@ -13,7 +13,6 @@ import org.mp4parser.boxes.iso14496.part12.TrackBox
 import java.io.File
 import java.io.RandomAccessFile
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 class Mp4Analyzer(private val file: File) {
@@ -117,8 +116,8 @@ class Mp4Analyzer(private val file: File) {
 
             // 4. 获取时间尺度和总时长
             val mediaHeader = mediaBox.getBoxes(MediaHeaderBox::class.java)?.firstOrNull()
-            val timescale = 1000f / (mediaHeader?.timescale ?: 1000) // 时间单位，1s=多少时间单位
-            val durationMs = ((mediaHeader?.duration ?: 0) * timescale).roundToLong() // 总时长（毫秒）
+            val timescale = 1000.0 / (mediaHeader?.timescale ?: 1000) // 时间单位，1000ms=多少时间单位
+            val duration = mediaHeader?.duration ?: 0 // 总时长（时间单位）
 
             // 5. 获取关键映射表
             // stts: 时间到采样的映射数据
@@ -135,16 +134,15 @@ class Mp4Analyzer(private val file: File) {
             var firstTime = 0L
             var firstSample = 0L
             for (entry in sttsEntries) {
-                val deltaMs = (entry.delta * timescale).roundToInt()
                 sttsInfos.add(
                     SttsEntryInfo(
                         firstTime,
                         firstSample,
                         entry.count,
-                        deltaMs
+                        entry.delta
                     )
                 )
-                firstTime += entry.count * deltaMs
+                firstTime += entry.count * entry.delta
                 firstSample += entry.count
             }
 
@@ -172,16 +170,17 @@ class Mp4Analyzer(private val file: File) {
 
             // 6. 计算片段范围
             val ranges = mutableListOf<SegmentRange>()
-            for (i in 1..(durationMs + intervalMs - 1) / intervalMs) {
+            val interval = (intervalMs / timescale).roundToLong()
+            for (i in 1..(duration + interval - 1) / interval) {
                 // 目标结束时间（毫秒）
-                val targetEndTime = min(i * intervalMs, durationMs)
+                val targetEndTime = min(i * interval, duration)
 
                 // 时间 -> 目标结束采样序号
                 val sttsEntryInfo = sttsInfos.first {
-                    it.firstTime + it.deltaMs * it.count >= targetEndTime
+                    it.firstTime + it.delta * it.count >= targetEndTime
                 }
                 val targetEndSample =
-                    sttsEntryInfo.firstSample + (targetEndTime - sttsEntryInfo.firstTime) / sttsEntryInfo.deltaMs
+                    sttsEntryInfo.firstSample + (targetEndTime - sttsEntryInfo.firstTime) / sttsEntryInfo.delta
 
                 // 目标结束采样序号 -> endChunk
                 val stscEntryInfo = stscInfos.first {
@@ -197,10 +196,10 @@ class Mp4Analyzer(private val file: File) {
                 // chunk -> endSample
                 val endSample = targetEndSample - remainingSample % samplesPerChunk
 
-                // endSample -> endTimeMs
+                // endSample -> endTime
                 val sttsEntryInfo1 = sttsInfos.first { it.firstSample + it.count >= endSample }
-                val endTimeMs =
-                    sttsEntryInfo1.firstTime + (endSample - sttsEntryInfo1.firstSample) * sttsEntryInfo1.deltaMs
+                val endTime =
+                    sttsEntryInfo1.firstTime + (endSample - sttsEntryInfo1.firstSample) * sttsEntryInfo1.delta
 
                 //  计算片段起始位置
                 var startOffset = 0L // 起始偏移量
@@ -216,9 +215,9 @@ class Mp4Analyzer(private val file: File) {
                 ranges.add(
                     SegmentRange(
                         startTimeMs,
-                        if (targetEndTime == durationMs) durationMs else endTimeMs,
+                        ((if (targetEndTime == duration) duration else endTime) * timescale).toLong(),
                         startOffset,
-                        if (targetEndTime == durationMs) totalSize else endOffset,
+                        if (targetEndTime == duration) totalSize else endOffset,
                         firstSample,
                         endSample,
                     )
@@ -226,7 +225,7 @@ class Mp4Analyzer(private val file: File) {
             }
 
             Log.d(TAG, "getSegmentRanges time: ${(System.nanoTime() - currentTime) / 1000 / 1000}")
-            return Mp4Segment(durationMs, ranges, syncSampleNumber.toList())
+            return Mp4Segment((duration * timescale).toLong(), ranges, syncSampleNumber.toList())
         }
     }
 }

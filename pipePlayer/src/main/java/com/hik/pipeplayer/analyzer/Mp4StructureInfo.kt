@@ -46,17 +46,17 @@ data class SegmentRange(
 /**
  * stts条目预处理信息
  *
- * @param firstTime 开始时间（毫秒）
+ * @param firstTime 开始时间（时间单位）
  * @param firstSample 开始采样索引
  * @param count 采样数量
- * @param deltaMs 每个采样的时间（毫秒）
+ * @param delta 每个采样的时间（时间单位）
  */
 @Keep
 data class SttsEntryInfo(
     val firstTime: Long,
     val firstSample: Long,
     val count: Long,
-    val deltaMs: Int,
+    val delta: Long,
 )
 
 /**
