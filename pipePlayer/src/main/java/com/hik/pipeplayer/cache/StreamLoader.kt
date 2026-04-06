@@ -102,6 +102,17 @@ class StreamLoader(
         Log.d(TAG, "启动缓存: $videoUrl")
 
         try {
+            val playFile = localCache.getPlayFile(videoUrl)
+            if (playFile.exists()
+                && !localCache.getIndexFile(videoUrl).exists()
+            ) {
+                withContext(Dispatchers.Main) {
+                    callback?.onReady(playFile.absolutePath)
+                    callback?.onComplete(playFile.absolutePath)
+                }
+                return@launch
+            }
+
             // 尝试加载index配置
             indexConfig = localCache.getIndexConfig(videoUrl)
 
@@ -302,6 +313,7 @@ class StreamLoader(
                 throw DownloadException()
             }
             result1.file.copyTo(result.file)
+            result1.file.delete()
         }
 
         val mp4Segment = analyzer.getSegmentRanges(DEFAULT_SEGMENT_DURATION_MS, result.totalSize)
@@ -395,41 +407,50 @@ class StreamLoader(
 
     private suspend fun updateBufferStatus() {
         val segments = indexConfig?.segments ?: return
-        val currentSegmentIndex = segments.indexOfFirst {
-            currentTimeMs in it.startTimeMs until it.endTimeMs
-        }.takeIf { it != -1 } ?: return
-        val segment = segments[currentSegmentIndex]
-
-        val bufferingLack = suspend {
+        if (segments.all { it.state == 1 }) {
+            Log.d(TAG, "完整视频下载完成")
+            localCache.getTempDir(videoUrl).deleteRecursively()
+            localCache.getIndexFile(videoUrl).delete()
             withContext(Dispatchers.Main) {
-                callback?.onBufferingLack()
+                callback?.onComplete(localCache.getPlayFile(videoUrl).absolutePath)
             }
-        }
-
-        val bufferReady = suspend {
-            withContext(Dispatchers.Main) {
-                callback?.onBufferingReady()
-            }
-        }
-
-        if (segment.state == 0) {
-            bufferingLack()
         } else {
-            var cacheTimeMs = segment.endTimeMs - currentTimeMs
-            val halfDurationMs = segmentDurationMs / 2
-            if (cacheTimeMs < halfDurationMs && currentSegmentIndex < segments.size - 1) {
-                val nextSegment = segments[currentSegmentIndex + 1]
-                if (nextSegment.state == 1) {
-                    cacheTimeMs = nextSegment.endTimeMs - currentTimeMs
+            val currentSegmentIndex = segments.indexOfFirst {
+                currentTimeMs in it.startTimeMs until it.endTimeMs
+            }.takeIf { it != -1 } ?: return
+            val segment = segments[currentSegmentIndex]
+
+            val bufferingLack = suspend {
+                withContext(Dispatchers.Main) {
+                    callback?.onBufferingLack()
                 }
             }
-            Log.d(TAG, "cacheTimeMs: $cacheTimeMs")
-            if (cacheTimeMs >= halfDurationMs
-                || (indexConfig?.durationMs ?: 0) - currentTimeMs <= halfDurationMs
-            ) {
-                bufferReady()
-            } else {
+
+            val bufferReady = suspend {
+                withContext(Dispatchers.Main) {
+                    callback?.onBufferingReady()
+                }
+            }
+
+            if (segment.state == 0) {
                 bufferingLack()
+            } else {
+                var cacheTimeMs = segment.endTimeMs - currentTimeMs
+                val halfDurationMs = segmentDurationMs / 2
+                if (cacheTimeMs < halfDurationMs && currentSegmentIndex < segments.size - 1) {
+                    val nextSegment = segments[currentSegmentIndex + 1]
+                    if (nextSegment.state == 1) {
+                        cacheTimeMs = nextSegment.endTimeMs - currentTimeMs
+                    }
+                }
+                Log.d(TAG, "cacheTimeMs: $cacheTimeMs")
+                if (cacheTimeMs >= halfDurationMs
+                    || (indexConfig?.durationMs ?: 0) - currentTimeMs <= halfDurationMs
+                ) {
+                    bufferReady()
+                } else {
+                    bufferingLack()
+                }
             }
         }
     }
