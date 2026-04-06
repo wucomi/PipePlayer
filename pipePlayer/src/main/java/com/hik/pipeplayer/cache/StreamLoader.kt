@@ -314,6 +314,30 @@ class StreamLoader(
             }
             result1.file.copyTo(result.file)
             result1.file.delete()
+        } else if (structureInfo.moovSize == 0L) {
+            // moov原子在文件末尾，下载完整的moov原子
+            val result1 = downloadSegment(
+                MetaSegment(
+                    id = getMetaSegmentId(2),
+                    startOffset = structureInfo.mdatOffset + structureInfo.mdatSize,
+                    endOffset = result.totalSize,
+                )
+            )
+            if (!result1.success) {
+                throw DownloadException()
+            }
+            RandomAccessFile(result.file, "rw").use { raf ->
+                raf.setLength(result.totalSize)
+                raf.seek(structureInfo.mdatOffset + structureInfo.mdatSize)
+                result1.file.inputStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        raf.write(buffer, 0, bytesRead)
+                    }
+                }
+            }
+            result1.file.delete()
         }
 
         val mp4Segment = analyzer.getSegmentRanges(DEFAULT_SEGMENT_DURATION_MS, result.totalSize)
