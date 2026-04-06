@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.RandomAccessFile
 
 /**
@@ -495,14 +496,18 @@ class StreamLoader(
     private suspend fun downloadComplete(): String? {
         requireLimitDiskCache()
         val playFile = localCache.getPlayFile(videoUrl)
+        val tmpFile = File("${localCache.getPlayFile(videoUrl).absolutePath}.tmp")
         val result = downloadManager.download(
             url = videoUrl,
             segmentId = null,
             start = -1,
             end = -1,
-            file = playFile
+            file = tmpFile
         ).await()
-        return if (result.success) playFile.absolutePath else null
+        return if (result.success) {
+            tmpFile.renameTo(playFile)
+            playFile.absolutePath
+        } else null
     }
 
     private fun requireLimitDiskCache() {
