@@ -2,10 +2,13 @@ package com.hik.pipeplayer
 
 import android.annotation.SuppressLint
 import android.graphics.SurfaceTexture
+import android.media.MediaDataSource
+import android.media.MediaExtractor
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
@@ -19,6 +22,11 @@ import com.hik.pipeplayer.download.HttpDownloader
 import com.hik.pipeplayer.error.ErrorCode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.IOException
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity(), CacheCallback {
 
@@ -32,6 +40,8 @@ class MainActivity : AppCompatActivity(), CacheCallback {
     private var currentVideoUrl: String? = null
     private var pendingSeekPosition: Int = 0
     private val progressHandler = Handler(Looper.getMainLooper())
+    private var startLoadStreamTime: Long = 0
+    private var startSeekTime: Long = 0
     private val progressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
@@ -105,9 +115,131 @@ class MainActivity : AppCompatActivity(), CacheCallback {
             }
         }
     }
+    class ReuseStreamDataSource(private val url: String) : MediaDataSource() {
+        private var connection: HttpURLConnection? = null
+        private var inputStream: InputStream? = null
+        private var currentPosition: Long = -1
+        private var contentLength: Long = -1
 
+        override fun getSize(): Long {
+            if (contentLength == -1L) {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.requestMethod = "HEAD"
+                contentLength = conn.contentLengthLong
+                conn.disconnect()
+            }
+            return contentLength
+        }
+
+        override fun readAt(position: Long, buffer: ByteArray?, offset: Int, size: Int): Int {
+            println("position = [${position}], buffer = [${buffer?.size}], offset = [${offset}], size = [${size}]==============")
+            if (buffer == null || size <= 0) return 0
+
+            // 位置不匹配，重建连接
+            if (position != currentPosition || inputStream == null) {
+                reconnect(position)
+            }
+
+            return try {
+                val read = inputStream!!.read(buffer, offset, size)
+                if (read > 0) {
+                    currentPosition += read
+                }
+                read
+            } catch (_: IOException) {
+                // 连接断开，重试一次
+                reconnect(position)
+                inputStream!!.read(buffer, offset, size).also {
+                    if (it > 0) currentPosition += it
+                }
+            }
+        }
+
+        private fun reconnect(position: Long) {
+            // 关闭旧连接
+            inputStream?.close()
+            connection?.disconnect()
+
+            // 建立新连接，Range 定位到指定位置
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.setRequestProperty("Range", "bytes=$position-")
+            conn.setRequestProperty("Connection", "keep-alive")
+
+            connection = conn
+            inputStream = conn.inputStream
+            currentPosition = position
+        }
+
+        override fun close() {
+            inputStream?.close()
+            connection?.disconnect()
+        }
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
     @SuppressLint("SetTextI18n")
     private fun setupControls() {
+//        thread {
+//
+//
+//            // 使用
+//            val extractor = MediaExtractor()
+//            extractor.setDataSource(ReuseStreamDataSource("https://v5-se-jltc-default.365yg.com/ccc6cba0794110b0b79d8adaeb28de38/69d678b9/video/tos/cn/tos-cn-v-0015c002/o8uUEELEGKi40CpgAIewAWgPfLqUETBBMe87Sp/?a=0&br=59958&bt=59958&btag=80000e00030000&cd=0%7C0%7C0%7C0&ch=0&cquery=106H&cr=0&cv=1&dr=0&dy_q=1775659095&dy_va_biz_cert=&er=6&ft=k7Fz7VVywIiRZm8Zmo~pK7pswApemQf_vrKlISd2do0g3cI&l=202604082238156C52C96BF375B0343371&lr=unwatermarked&mime_type=video_mp4&net=5&qs=13&rc=MzNvbHk5cjR0OTMzNGkzM0BpMzNvbHk5cjR0OTMzNGkzM0Byc2ReMmRjYmhhLS1kLS9zYSNyc2ReMmRjYmhhLS1kLS9zcw%3D%3D"))
+////            val serverSocket = ServerSocket(5555)
+////            val accept = serverSocket.accept()
+////            println(accept.getInputStream().readBytes().toHexString()+"==================")
+//
+//        thread {
+//            while (true) {
+//                println("===${extractor.cachedDuration}=====${extractor.getTrackFormat(0)}=====${extractor.sampleTime}")
+//                Thread.sleep(500)
+//            }
+//        }
+//        }
+
+        progressHandler.postDelayed({
+//            val extractor = MediaExtractor()
+//            extractor.setDataSource("https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/10/80/36603168010/36603168010-1-192.mp4?e=ig8euxZM2rNcNbRVhwdVhwdlhWdVhwdVhoNvNC8BqJIzNbfq9rVEuxTEnE8L5F6VnEsSTx0vkX8fqJeYTj_lta53NCM=&uipk=5&platform=html5&trid=4cd1c74cae3c43708e339da05cfee26O&deadline=1775497658&mid=0&gen=playurlv3&og=hw&oi=1385955528&nbs=1&os=estghw&upsig=f2d795dab22316a2fc420dd19c1d5c3d&uparams=e,uipk,platform,trid,deadline,mid,gen,og,oi,nbs,os&bvc=vod&nettype=1&bw=524051&agrr=0&buvid=&build=7330300&dl=0&f=O_0_0&orderid=0,3")
+//            lifecycleScope.launch {
+//                while (true) {
+//                    println("===${extractor.cachedDuration}=====${extractor.getTrackFormat(0)}=====${extractor.sampleTime}")
+//                    delay(200)
+//                }
+//            }
+//            progressHandler.postDelayed({
+//                // 必须先获取并选中轨道！
+//                val trackCount = extractor.trackCount
+//                Log.e("XXX", "Tracks: $trackCount")
+//
+//                if (trackCount == 0) {
+//                    Log.e("XXX", "No tracks found!")
+//                    return@postDelayed
+//                }
+//                // 选中第一个视频轨道
+//                for (i in 0 until trackCount) {
+//                    val format = extractor.getTrackFormat(i)
+//                    val mime = format.getString(MediaFormat.KEY_MIME)
+//                    Log.e("XXX", "Track $i: $mime")
+//
+//                    if (mime?.startsWith("video/") == true) {
+//                        extractor.selectTrack(i)  // ← 关键！必须选中轨道
+//                        Log.e("XXX", "Selected track $i")
+//                        break
+//                    }
+//                }
+//
+//                extractor.seekTo(200000000, SEEK_TO_PREVIOUS_SYNC)
+////                val buffer = ByteBuffer.allocate(1024 * 1024)
+////                extractor.readSampleData(buffer, 0) // ← 第一次！触发网络请求该位置数据
+//                println("===============1================")
+//progressHandler.postDelayed({
+//    println("===================2============")
+//
+//    extractor.seekTo(400000000, SEEK_TO_PREVIOUS_SYNC)
+//},2000)
+//            },200)
+        },5000)
+
         binding.btnPlay.setOnClickListener {
             val url = binding.etVideoUrl.text.toString().trim()
             if (url.isNotEmpty()) {
@@ -132,6 +264,8 @@ class MainActivity : AppCompatActivity(), CacheCallback {
 
                 if (!fromUser) {
                     streamingLoader?.seekTo(progress.toLong())
+                } else {
+                    startSeekTime = System.nanoTime()
                 }
             }
 
@@ -147,10 +281,12 @@ class MainActivity : AppCompatActivity(), CacheCallback {
             }
         })
 
-        binding.etVideoUrl.setText("https://link.jiyiho.cn/orfile/down.php/a93fc8f8298f6303a13a7a2f122b5d10.mp4")
+        binding.etVideoUrl.setText("http://192.168.124.21:55554/b0faed6acb03efb0b61a2aa2d82d1b64.mp4")
     }
 
     private fun startPlayback(url: String) {
+        startLoadStreamTime = System.nanoTime()
+
         currentVideoUrl = url
 
         streamingLoader?.release()
@@ -158,6 +294,7 @@ class MainActivity : AppCompatActivity(), CacheCallback {
         streamingLoader = StreamLoader(cacheDir, url).apply {
             callback = this@MainActivity
             setDownloader(HttpDownloader())
+            setSegmentTime(5)
         }
 
         binding.progressBar.visibility = View.VISIBLE
@@ -168,6 +305,7 @@ class MainActivity : AppCompatActivity(), CacheCallback {
 
     @SuppressLint("SetTextI18n")
     private fun playVideo(path: String) {
+        Log.i(TAG, "首屏时间: ${(System.nanoTime() - startLoadStreamTime) / 1000f / 1000 / 1000}")
         try {
             mediaPlayer?.apply {
                 // 确保在调用 reset 前处于可重置状态
@@ -289,6 +427,10 @@ class MainActivity : AppCompatActivity(), CacheCallback {
     override fun onBufferingReady() {
         isBuffering = false
         resumePlayback()
+        if (startSeekTime != 0L) {
+            Log.i(TAG, "seek恢复时间: ${(System.nanoTime() - startSeekTime) / 1000f / 1000 / 1000}s")
+            startSeekTime = 0L
+        }
     }
 
     override fun onComplete(filePath: String) {
@@ -323,5 +465,9 @@ class MainActivity : AppCompatActivity(), CacheCallback {
         mediaPlayer = null
         isPlaying = false
         isBuffering = false
+    }
+
+    companion object {
+        const val TAG = "MainActivity"
     }
 }
